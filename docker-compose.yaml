@@ -1,0 +1,63 @@
+version: '3.9'
+
+services:
+  auth:
+    image: jboss/keycloak:12.0.1
+    ports:
+    - 8080:8080
+    environment:
+      KEYCLOAK_USER: admin
+      KEYCLOAK_PASSWORD: admin
+      KEYCLOAK_IMPORT: /data/realm.json
+      DB_VENDOR: h2
+    volumes:
+    - ./data/keycloak:/data
+    healthcheck:
+      test: ['CMD', 'curl', 'http://localhost:8080/auth']
+      interval: 4s
+
+  postgres:
+    image: postgres:13.1-alpine
+    ports:
+    - 5432:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+    - ./data/postgres/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ['CMD', 'psql', '-U', 'postgres', '-c', '\echo Im alive']
+      interval: 4s
+
+  event-service:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    image: docker.pkg.github.com/tuuturu/pager-event-service/pager-event-service:0.0.9
+    ports:
+      - 3000:3000
+    environment:
+      DISCOVERY_URL: http://auth:8080/auth/realms/pager/.well-known/openid-configuration
+      DSN: postgres://postgres:postgres@postgres:5432/postgres
+      LOG_LEVEL: debug
+
+  gatekeeper:
+    depends_on:
+      auth:
+        condition: service_healthy
+    image: docker.pkg.github.com/oslokommune/gatekeeper/gatekeeper:1.0.41
+    ports:
+    - 4554:4554
+    environment:
+      BASE_URL: http://localhost:4554
+      CLIENT_ID: gatekeeper
+      CLIENT_SECRET: 23ef6a8d-88e8-41f9-a0ba-c5510929b98a
+      DISCOVERY_URL: http://auth:8080/auth/realms/pager/.well-known/openid-configuration
+      ORIGIN_WHITELIST: http://localhost:8081
+      TOKEN_COOKIES_SECURE: 'false'
+      TOKEN_COOKIES_SAMESITE: lax
+      LOG_LEVEL: silly
+      LOG_PRETTY_PRINT: 'true'
+      UPSTREAMS: |
+        events=http://event-service:3000;
